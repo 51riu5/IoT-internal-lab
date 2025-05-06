@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Voice-Controlled Relays with Brightness & State</title>
+  <style>
+    body { font-family: sans-serif; padding: 2em; }
+    button { font-size: 1.1em; padding: 0.5em 1em; }
+    #status { margin: 1em 0; }
+    .relay {
+      margin: 0.5em 0;
+      font-size: 1.1em;
+    }
+    .state.on { color: green; }
+    .state.off { color: red; }
+    .brightness { margin-left: 1em; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Voice-Controlled Relays</h1>
+  <p>Commands: <em>“relay 2 on”</em>, <em>“relay 3 brightness 50”</em>, <em>“state”</em></p>
+  <button id="start">🎤 Start Listening</button>
+  <p id="status">Click “Start Listening” and speak your command.</p>
+
+  <div id="relays">
+    <div class="relay" data-id="1">
+      Relay 1: <span class="state off">OFF</span>
+      <span class="brightness">Brightness: 0%</span>
+    </div>
+    <div class="relay" data-id="2">
+      Relay 2: <span class="state off">OFF</span>
+      <span class="brightness">Brightness: 0%</span>
+    </div>
+    <div class="relay" data-id="3">
+      Relay 3: <span class="state off">OFF</span>
+      <span class="brightness">Brightness: 0%</span>
+    </div>
+    <div class="relay" data-id="4">
+      Relay 4: <span class="state off">OFF</span>
+      <span class="brightness">Brightness: 0%</span>
+    </div>
+  </div>
+
+  <script>
+    const serverUrl = 'http://localhost:3000';
+    const statusEl  = document.getElementById('status');
+
+    // Map words → digits
+    const wordToDigit = {
+      one: '1', two: '2', three: '3', four: '4', to: '2'
+    };
+
+    function normalize(text) {
+      // replace number words
+      for (let w in wordToDigit) {
+        const d = wordToDigit[w];
+        text = text.replace(new RegExp('\\b' + w + '\\b', 'gi'), d);
+      }
+      // strip filler words and symbols
+      text = text.replace(/\bset\b/gi, '')
+                 .replace(/%/g, '')
+                 .replace(/ +/g, ' ')
+                 .trim();
+      // collapse spaces between digits (“2 5” → “25”)
+      text = text.replace(/(?<=\d)\s+(?=\d)/g, '');
+      return text;
+    }
+
+    // Regexes
+    const onoffRe  = /relay\s*(1|2|3|4)\s*(on|off)/i;
+    const brightRe = /relay\s*(1|2|3|4)\s*brightness\s*(\d{1,3})/i;
+
+    // Setup Web Speech API
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      statusEl.textContent = '⚠️ Your browser does not support Web Speech API.';
+    } else {
+      const recog = new SpeechRecognition();
+      recog.lang = 'en-US';
+      recog.continuous = false;
+      recog.interimResults = false;
+
+      recog.onresult = e => {
+        let text = e.results[0][0].transcript.trim().toLowerCase();
+        statusEl.textContent = 'Heard: "' + text + '"';
+        let cmd = normalize(text);
+
+        // 1) STATE
+        if (cmd.includes('state')) {
+          fetch(`${serverUrl}/status`)
+            .then(r => r.json())
+            .then(states => {
+              statusEl.textContent = '✨ State fetched';
+              for (let id in states) {
+                const relay = states[id];
+                updateRelayUI(id, relay.on, relay.brightness);
+              }
+            })
+            .catch(err => statusEl.textContent = '⚠️ Status error');
+          return;
+        }
+
+        // 2) ON/OFF
+        let m = onoffRe.exec(cmd);
+        if (m) {
+          const [, id, action] = m;
+          fetch(`${serverUrl}/relay/${id}/${action}`)
+            .then(r => r.json())
+            .then(data => {
+              statusEl.textContent = `✅ Relay ${id} → ${action.toUpperCase()}`;
+              updateRelayUI(id, data.on, data.brightness);
+            })
+            .catch(err => statusEl.textContent = '⚠️ Command error');
+          return;
+        }
+
+        // 3) BRIGHTNESS
+        m = brightRe.exec(cmd);
+        if (m) {
+          let [, id, val] = m;
+          val = Math.max(0, Math.min(100, parseInt(val, 10)));
+          fetch(`${serverUrl}/relay/${id}/brightness/${val}`)
+            .then(r => r.json())
+            .then(data => {
+              statusEl.textContent = `✅ Relay ${id} brightness ${data.brightness}%`;
+              updateRelayUI(id, data.on, data.brightness);
+            })
+            .catch(err => statusEl.textContent = '⚠️ Command error');
+          return;
+        }
+
+        // Unrecognized
+        statusEl.textContent = '⚠️ Unrecognized command format.';
+      };
+
+      recog.onerror = e => {
+        console.error('Speech error', e);
+        statusEl.textContent = '⚠️ Speech error: ' + e.error;
+      };
+
+      document.getElementById('start').onclick = () => {
+        statusEl.textContent = 'Listening…';
+        recog.start();
+      };
+    }
+
+    // Helper to update UI
+    function updateRelayUI(id, isOn, brightness) {
+      const container = document.querySelector(`.relay[data-id="${id}"]`);
+      const stateEl = container.querySelector('.state');
+      const brightEl = container.querySelector('.brightness');
+      stateEl.textContent = isOn ? 'ON' : 'OFF';
+      stateEl.className = 'state ' + (isOn ? 'on' : 'off');
+      brightEl.textContent = `Brightness: ${brightness}%`;
+    }
+  </script>
+</body>
+</html>
